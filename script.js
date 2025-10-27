@@ -24,11 +24,17 @@ function showHistory(stationId, history) {
     .reverse()
     .map(
       (item) => `
-      <div class="history-item">
-        <span>${item.day}</span>
-        <span>${item.value} mm</span>
-      </div>
-    `
+          <div class="history-item">
+            <span>${
+              item?.timestamp
+                ? new Date(item?.timestamp)
+                    ?.toLocaleDateString("en-GB")
+                    ?.replace(/\//g, "/")
+                : ""
+            }</span>
+            <span>${item?.value?.toFixed(1)} mm</span>
+          </div>
+        `
     )
     .join("");
 
@@ -50,13 +56,16 @@ function showChanges(stationId, changes) {
   }
 
   const list = changes
-    .slice(-5)
+    .slice(-10)
     .reverse()
     .map(
       (ch) => `
       <div class="change-item">
         <span>${ch.time}</span>
-        <span>${ch.diff > 0 ? "▲" : "▼"} ${ch.diff} mm</span>
+        <span>${ch.oldValue?.toFixed(1)} mm → ${ch.newValue?.toFixed(1)} mm</span>
+        <span style="color:${ch.diff > 0 ? "red" : "green"}">
+          ${ch.diff > 0 ? "▲" : "▼"} ${Math.abs(ch.diff)} mm
+        </span>
       </div>
     `
     )
@@ -93,7 +102,7 @@ async function fetchRainData() {
     ]);
     const oldData = stored.rainData || {};
     const rainHistory = stored.rainHistory || {};
-    const rainChanges = stored.rainChanges || {}; // ✅ thêm phần lấy thay đổi
+    const rainChanges = stored.rainChanges || {};
 
     const now = Date.now();
     const rainDay = getRainDay();
@@ -107,22 +116,66 @@ async function fetchRainData() {
       const level = item.level || "Không xác định";
       const color = item.color || "#ccc";
       const previous = oldData[stationId];
-
       let changeText = "";
       let showDepth = `${currentDepth.toFixed(1)} mm`;
       let lastUpdatedText = "";
       let updated = false;
 
+      // So sánh với giá trị cũ
       if (previous && typeof previous.value === "number") {
         const diff = currentDepth - previous.value;
+
+        if (diff !== 0) {
+          const time = new Date().toLocaleTimeString("vi-VN");
+          if (!rainChanges[stationId]) rainChanges[stationId] = [];
+
+          rainChanges[stationId].push({
+            time,
+            diff: parseFloat(diff.toFixed(1)),
+            newValue: currentDepth,
+            oldValue: previous.value,
+          });
+
+          // Giữ lại 10 thay đổi gần nhất
+          rainChanges[stationId] = rainChanges[stationId].slice(-10);
+        }
+        let icon = `<span style="color:${diff > 0 ? "red" : "green"}"> ${diff > 0 ? "▲" : "▼"} </span>`;
         if (diff > 0) {
-          changeText = ` (▲ +${diff.toFixed(1)} mm)`;
+          changeText = ` (${icon} +${diff.toFixed(1)} mm)`;
           updated = true;
         } else if (diff < 0) {
-          changeText = ` (▼ ${diff.toFixed(1)} mm)`;
+          changeText = ` (${icon} ${diff.toFixed(1)} mm)`;
           updated = true;
         } else {
-          changeText = " (– 0 mm)";
+        }
+
+        if (rainChanges[stationId]?.length > 0) {
+          const listData = rainChanges[stationId];
+          const listDataSorted = [...listData].sort((a, b) => {
+            const toDate = (t) => {
+              const [time, date] = t?.split(" ");
+              console.log({ time, date });
+              if (!time || !date) return new Date(0);
+              const [h, m, s] = time?.split(":");
+              const [day, month, year] = date?.split("/");
+              return new Date(`${year}-${month}-${day}T${h}:${m}:${s}`);
+            };
+            return toDate(b.time) - toDate(a.time); // mới nhất trước
+          });
+          const lastChange = listDataSorted[0];
+          if (lastChange?.diff > 0) {
+            changeText = ` (<span style="color:red">▲</span> +${lastChange?.diff.toFixed(1)} mm)`;
+            updated = true;
+          } else if (lastChange?.diff < 0) {
+            changeText = ` (<span style="color:red">▲</span> +${lastChange?.diff.toFixed(1)} mm)`;
+            updated = true;
+          } else {
+            changeText = "";
+            updated = false;
+          }
+        } else {
+          changeText = "";
+          updated = false;
         }
 
         const lastUpdate = new Date(previous.timestamp).toLocaleTimeString(
@@ -131,7 +184,8 @@ async function fetchRainData() {
         lastUpdatedText = `<p><em>Cập nhật lần cuối: ${lastUpdate}</em></p>`;
       }
 
-      if (previous && previous.day !== rainDay) {
+      // Lưu vào lịch sử nếu qua ngày mới
+      if (previous && previous?.day !== rainDay) {
         if (!rainHistory[stationId]) rainHistory[stationId] = [];
         rainHistory[stationId].push({
           day: previous.day,
@@ -142,6 +196,7 @@ async function fetchRainData() {
       }
 
       const shouldUpdate = !previous || previous.value !== currentDepth;
+
       updatedData[stationId] = {
         name,
         value: shouldUpdate ? currentDepth : previous.value,
@@ -158,12 +213,12 @@ async function fetchRainData() {
       div.innerHTML = `
         <h3>${name}</h3>
         <p><strong>Địa chỉ:</strong> ${address}</p>
-        <p><strong>Lượng mưa:</strong> ${showDepth}${changeText}</p>
+        <p><strong>Lượng mưa:</strong> <span class="depth">${showDepth}</span> ${changeText}</p>
         <p><strong>Mức độ:</strong> ${level}</p>
         ${lastUpdatedText}
         <p>
-          <a href="#" class="view-history" data-id="${stationId}">📊 Xem lịch sử</a> |
-          <a href="#" class="view-changes" data-id="${stationId}">🌀 Xem thay đổi</a>
+          <a href="#" class="view-history" data-id="${stationId}">📊 Xem lịch sử theo ngày</a> |
+          <a href="#" class="view-changes" data-id="${stationId}">🌀 Xem thay đổi trong ngày</a>
         </p>
         <div class="history" id="history-${stationId}" style="display:none;"></div>
         <div class="changes" id="changes-${stationId}" style="display:none;"></div>
@@ -176,9 +231,10 @@ async function fetchRainData() {
     await chrome.storage.local.set({
       rainData: updatedData,
       rainHistory,
+      rainChanges,
     });
 
-    // 🔹 Sự kiện click “Xem lịch sử”
+    // Sự kiện xem lịch sử
     document.querySelectorAll(".view-history").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.preventDefault();
@@ -190,7 +246,7 @@ async function fetchRainData() {
       });
     });
 
-    // 🔹 Sự kiện click “Xem thay đổi”
+    // Sự kiện xem thay đổi
     document.querySelectorAll(".view-changes").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.preventDefault();
