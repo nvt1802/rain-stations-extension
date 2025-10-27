@@ -1,9 +1,9 @@
 const API_URL = "https://data.vrain.vn/public/current/31.json";
 
 chrome.runtime.onInstalled.addListener(() => {
-  // Tạo alarm cập nhật mỗi 15 phút
+  // Cập nhật mỗi 15 phút
   chrome.alarms.create("updateRain", { periodInMinutes: 15 });
-  fetchRainData(); // chạy ngay khi cài
+  fetchRainData(); // chạy ngay khi cài đặt
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -20,9 +20,14 @@ async function fetchRainData() {
     const json = await res.json();
     const now = Date.now();
 
-    const stored = await chrome.storage.local.get(["rainData", "rainHistory"]);
+    const stored = await chrome.storage.local.get([
+      "rainData",
+      "rainHistory",
+      "rainChanges",
+    ]);
     const oldData = stored.rainData || {};
     const rainHistory = stored.rainHistory || {};
+    const rainChanges = stored.rainChanges || {}; // ✅ Thêm object lưu thay đổi
     const rainDay = getRainDay();
 
     const updatedData = {};
@@ -33,7 +38,7 @@ async function fetchRainData() {
       const value = item.sumDepth ?? 0;
       const previous = oldData[id];
 
-      // Nếu qua ngày mới (sau 19h) → lưu vào lịch sử
+      // ✅ Lưu vào lịch sử khi qua ngày mới (sau 19h)
       if (previous && previous.day !== rainDay) {
         if (!rainHistory[id]) rainHistory[id] = [];
         rainHistory[id].push({
@@ -41,6 +46,29 @@ async function fetchRainData() {
           value: previous.value,
           timestamp: previous.timestamp,
         });
+
+        // Giữ tối đa 7 ngày lịch sử
+        rainHistory[id] = rainHistory[id].slice(-7);
+      }
+
+      // ✅ Tính lượng thay đổi (diff)
+      let diff = 0;
+      if (previous && typeof previous.value === "number") {
+        diff = parseFloat((value - previous.value).toFixed(1));
+
+        // Nếu có thay đổi
+        if (diff !== 0) {
+          if (!rainChanges[id]) rainChanges[id] = [];
+          rainChanges[id].push({
+            time: new Date(now).toLocaleString("vi-VN"),
+            oldValue: previous.value,
+            newValue: value,
+            diff,
+          });
+
+          // Giữ tối đa 10 bản ghi thay đổi gần nhất
+          rainChanges[id] = rainChanges[id].slice(-10);
+        }
       }
 
       updatedData[id] = { name, value, day: rainDay, timestamp: now };
@@ -49,6 +77,7 @@ async function fetchRainData() {
     await chrome.storage.local.set({
       rainData: updatedData,
       rainHistory,
+      rainChanges, // ✅ Lưu thêm vào storage
       lastFetch: now,
     });
 

@@ -2,14 +2,14 @@ const API_URL = "https://data.vrain.vn/public/current/31.json";
 const listEl = document.getElementById("station-list");
 const loadingEl = document.getElementById("loading");
 
-// Tính "ngày mưa" theo mốc 19h (từ 19h hôm trước → 19h hôm nay)
+// 🕒 Tính "ngày mưa" theo mốc 19h
 function getRainDay() {
   const now = new Date();
   if (now.getHours() < 19) now.setDate(now.getDate() - 1);
-  return now.toISOString().split("T")[0]; // YYYY-MM-DD
+  return now.toISOString().split("T")[0];
 }
 
-// Hiển thị lịch sử mưa của 1 trạm
+// 📊 Hiển thị lịch sử mưa 7 ngày
 function showHistory(stationId, history) {
   const container = document.querySelector(`#history-${stationId}`);
   if (!container) return;
@@ -20,7 +20,7 @@ function showHistory(stationId, history) {
   }
 
   const list = history
-    .slice(-7) // Chỉ hiện 7 ngày gần nhất
+    .slice(-7)
     .reverse()
     .map(
       (item) => `
@@ -34,6 +34,36 @@ function showHistory(stationId, history) {
 
   container.innerHTML = `
     <div class="history-list">
+      ${list}
+    </div>
+  `;
+}
+
+// 📈 Hiển thị lịch sử thay đổi trong ngày
+function showChanges(stationId, changes) {
+  const container = document.querySelector(`#changes-${stationId}`);
+  if (!container) return;
+
+  if (!changes || changes.length === 0) {
+    container.innerHTML = "<p><em>Chưa có thay đổi trong ngày.</em></p>";
+    return;
+  }
+
+  const list = changes
+    .slice(-5)
+    .reverse()
+    .map(
+      (ch) => `
+      <div class="change-item">
+        <span>${ch.time}</span>
+        <span>${ch.diff > 0 ? "▲" : "▼"} ${ch.diff} mm</span>
+      </div>
+    `
+    )
+    .join("");
+
+  container.innerHTML = `
+    <div class="change-list">
       ${list}
     </div>
   `;
@@ -55,10 +85,15 @@ async function fetchRainData() {
       return;
     }
 
-    // Lấy dữ liệu cũ
-    const stored = await chrome.storage.local.get(["rainData", "rainHistory"]);
+    // 🔹 Lấy dữ liệu cũ
+    const stored = await chrome.storage.local.get([
+      "rainData",
+      "rainHistory",
+      "rainChanges",
+    ]);
     const oldData = stored.rainData || {};
     const rainHistory = stored.rainHistory || {};
+    const rainChanges = stored.rainChanges || {}; // ✅ thêm phần lấy thay đổi
 
     const now = Date.now();
     const rainDay = getRainDay();
@@ -78,10 +113,8 @@ async function fetchRainData() {
       let lastUpdatedText = "";
       let updated = false;
 
-      // ✅ Nếu có dữ liệu cũ → so sánh giá trị
       if (previous && typeof previous.value === "number") {
         const diff = currentDepth - previous.value;
-
         if (diff > 0) {
           changeText = ` (▲ +${diff.toFixed(1)} mm)`;
           updated = true;
@@ -98,7 +131,6 @@ async function fetchRainData() {
         lastUpdatedText = `<p><em>Cập nhật lần cuối: ${lastUpdate}</em></p>`;
       }
 
-      // ✅ Nếu qua ngày mới (sau 19h) thì lưu vào lịch sử
       if (previous && previous.day !== rainDay) {
         if (!rainHistory[stationId]) rainHistory[stationId] = [];
         rainHistory[stationId].push({
@@ -106,16 +138,10 @@ async function fetchRainData() {
           value: previous.value,
           timestamp: previous.timestamp,
         });
-
-        // Giữ tối đa 7 ngày
         rainHistory[stationId] = rainHistory[stationId].slice(-7);
       }
 
-      // ✅ Điều kiện update:
-      // - Lần đầu chưa có dữ liệu
-      // - Hoặc giá trị thay đổi (diff ≠ 0)
       const shouldUpdate = !previous || previous.value !== currentDepth;
-
       updatedData[stationId] = {
         name,
         value: shouldUpdate ? currentDepth : previous.value,
@@ -123,7 +149,7 @@ async function fetchRainData() {
         day: rainDay,
       };
 
-      // Render UI
+      // 🧱 Render UI
       const div = document.createElement("div");
       div.className = "station";
       div.style.setProperty("--level-color", color);
@@ -135,8 +161,12 @@ async function fetchRainData() {
         <p><strong>Lượng mưa:</strong> ${showDepth}${changeText}</p>
         <p><strong>Mức độ:</strong> ${level}</p>
         ${lastUpdatedText}
-        <p><a href="#" class="view-history" data-id="${stationId}">📊 Xem lịch sử</a></p>
+        <p>
+          <a href="#" class="view-history" data-id="${stationId}">📊 Xem lịch sử</a> |
+          <a href="#" class="view-changes" data-id="${stationId}">🌀 Xem thay đổi</a>
+        </p>
         <div class="history" id="history-${stationId}" style="display:none;"></div>
+        <div class="changes" id="changes-${stationId}" style="display:none;"></div>
       `;
 
       listEl.appendChild(div);
@@ -148,15 +178,27 @@ async function fetchRainData() {
       rainHistory,
     });
 
-    // ✅ Sự kiện xem lịch sử
+    // 🔹 Sự kiện click “Xem lịch sử”
     document.querySelectorAll(".view-history").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.preventDefault();
         const id = btn.dataset.id;
-        const historyEl = document.querySelector(`#history-${id}`);
-        const isVisible = historyEl.style.display === "block";
-        historyEl.style.display = isVisible ? "none" : "block";
+        const el = document.querySelector(`#history-${id}`);
+        const isVisible = el.style.display === "block";
+        el.style.display = isVisible ? "none" : "block";
         if (!isVisible) showHistory(id, rainHistory[id]);
+      });
+    });
+
+    // 🔹 Sự kiện click “Xem thay đổi”
+    document.querySelectorAll(".view-changes").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        const id = btn.dataset.id;
+        const el = document.querySelector(`#changes-${id}`);
+        const isVisible = el.style.display === "block";
+        el.style.display = isVisible ? "none" : "block";
+        if (!isVisible) showChanges(id, rainChanges[id]);
       });
     });
   } catch (err) {
@@ -165,5 +207,5 @@ async function fetchRainData() {
   }
 }
 
-// Gọi khi mở popup
+// 🚀 Khi mở popup
 fetchRainData();
